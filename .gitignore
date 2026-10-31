@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+*.log
+data/*.db
+data/*.db-*
+data/notion_books.json
+.env
+*.env
+secrets*

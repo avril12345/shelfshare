@@ -1,0 +1,29 @@
+:root{--g:#39ff6a;--g2:#1f9e45;--bg:#0b0f0b;--panel:#111811;--amber:#ffb000;--txt:#d6f5dc}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--txt);font:16px/1.45 "IBM Plex Mono","Courier New",ui-monospace,monospace}
+body{max-width:720px;margin:auto;padding:12px 14px 60px;
+ background-image:repeating-linear-gradient(0deg,rgba(57,255,106,.035) 0 1px,transparent 1px 3px)}
+header{display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid var(--g2);margin-bottom:12px}
+h1{color:var(--g);font-size:1.4rem;margin:.4em 0;text-shadow:0 0 8px rgba(57,255,106,.6);letter-spacing:.06em}
+h2{color:var(--g);font-size:.95rem;margin:0 0 .6em;letter-spacing:.1em}
+.cur{animation:b 1s steps(1) infinite}@keyframes b{50%{opacity:0}}
+.card{background:var(--panel);border:1px solid var(--g2);border-radius:6px;padding:14px;margin:0 0 14px}
+input{width:100%;background:#050805;color:var(--g);border:1px solid var(--g2);border-radius:4px;padding:12px;font:inherit;margin:0 0 10px}
+input:focus{outline:2px solid var(--g);box-shadow:0 0 10px rgba(57,255,106,.4)}
+button{background:var(--g);color:#031;border:0;border-radius:4px;padding:11px 14px;font:inherit;font-weight:700;cursor:pointer;letter-spacing:.05em}
+button.ghost{background:transparent;color:var(--g);border:1px solid var(--g2)}button:disabled{opacity:.4}
+.row{display:flex;gap:8px;align-items:flex-start}.row input{flex:1}
+nav{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:12px}
+nav button{background:transparent;color:var(--g2);border:1px solid var(--g2);padding:9px 2px;font-size:.78rem}
+nav button.on{background:var(--g);color:#031}
+.hidden{display:none!important}.dim{color:#8fb79a}.small{font-size:.85rem}.err{color:#ff6b6b}.ok{color:var(--g)}
+.res{display:flex;gap:12px;border-bottom:1px dashed #234;padding:12px 0}
+.cover{width:56px;height:84px;object-fit:cover;border:1px solid var(--g2);background:#030;flex:none}
+#coverPrev{width:80px;height:120px;display:block;margin-bottom:10px}
+.t{color:#fff;font-weight:700}.a{color:#8fb79a;font-size:.9rem}
+.yes{color:var(--g);margin-top:4px}.friend{color:var(--amber);margin-top:4px}
+.friend button{padding:4px 8px;font-size:.75rem;margin-left:6px;background:var(--amber)}
+.none{color:#ff6b6b;font-size:1.1rem;padding:16px 0}
+.verdict{font-size:1.2rem;color:var(--g);padding:6px 0}
+#reader{width:100%;margin-bottom:10px}#vid{width:100%;border:1px solid var(--g2);margin-bottom:10px}
+.loc{color:var(--amber);margin:14px 0 4px;border-bottom:1px solid #333}.mb{display:flex;justify-content:space-between;gap:8px;padding:4px 0}
+.mb button{padding:2px 8px;font-size:.7rem}
