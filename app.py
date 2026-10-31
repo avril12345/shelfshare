@@ -12,6 +12,8 @@ app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS reset_tokens(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at TEXT NOT NULL, used INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, username TEXT UNIQUE COLLATE NOCASE NOT NULL,
   password_hash TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS books(id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL REFERENCES users(id),
@@ -368,6 +370,25 @@ def scan_shelf():
     if not shelf_scanner.ENABLED:
         return jsonify(error="Shelf-photo scanning is coming soon. Use the barcode scanner for now."), 501
     return jsonify(candidates=shelf_scanner.read_spines(request.files["photo"].read()))
+
+@app.get("/set-password")
+def set_password_page(): return send_from_directory(BASE + "/static", "set-password.html")
+
+@app.post("/api/set-password")
+def set_password():
+    d = request.get_json(force=True, silent=True) or {}
+    tok, pw = (d.get("token") or "").strip(), d.get("password") or ""
+    if len(pw) < 8: return jsonify(error="Password must be at least 8 characters"), 400
+    c = db()
+    c.execute("BEGIN IMMEDIATE")
+    r = c.execute("SELECT user_id FROM reset_tokens WHERE token=? AND used=0 AND expires_at > datetime('now')", (tok,)).fetchone()
+    if not tok or not r:
+        c.execute("ROLLBACK"); return jsonify(error="This link is invalid, expired or already used"), 400
+    c.execute("UPDATE users SET password_hash=? WHERE id=?", (generate_password_hash(pw), r[0]))
+    c.execute("UPDATE reset_tokens SET used=1 WHERE token=?", (tok,))
+    c.commit()
+    session.clear()
+    return jsonify(ok=True)
 
 @app.get("/")
 def index(): return send_from_directory(BASE + "/static", "index.html")
