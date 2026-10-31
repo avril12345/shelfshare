@@ -1,58 +1,62 @@
 <!doctype html><html lang="en-GB"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>ShelfShare</title><meta name="theme-color" content="#0b0f0b">
+<title>ShelfShare · A Lending Library</title><meta name="theme-color" content="#1f3a2c">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=Special+Elite&display=swap">
 <link rel="stylesheet" href="/static/style.css">
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js" defer></script>
 </head><body>
-<header><h1>&gt; SHELFSHARE<span class="cur">_</span></h1><div id="who"></div></header>
+<header class="masthead"><div><h1>ShelfShare</h1><p class="motto">A Private Lending Library · Est. 2026</p></div><div id="who"></div></header>
 
-<section id="auth" class="card hidden">
-  <p class="dim">Share your bookshelves with friends. Borrow instead of buy.</p>
-  <input id="u" placeholder="username" autocomplete="username" autocapitalize="off">
-  <input id="p" type="password" placeholder="password (6+ chars)" autocomplete="current-password">
-  <input id="inv" placeholder="invite code (needed to sign up)" autocapitalize="characters" autocomplete="off">
-  <div class="row"><button id="loginBtn">LOG IN</button><button id="signupBtn" class="ghost">SIGN UP</button></div>
-  <p id="authMsg" class="err"></p>
+<section id="auth" class="libcard hidden" aria-labelledby="cardTitle">
+  <div class="libcard-head"><span class="crest" aria-hidden="true">❦</span><h2 id="cardTitle">Library Card</h2><span class="stamp-sm">Members only</span></div>
+  <p class="intro">Share your bookshelves with friends &amp; family. Borrow instead of buy.</p>
+  <label class="field"><span>Member name</span><input id="u" autocomplete="username" autocapitalize="off"></label>
+  <label class="field"><span>Password <em>(6+ characters)</em></span><input id="p" type="password" autocomplete="current-password"></label>
+  <label class="field"><span>Invitation no. <em>(new members only)</em></span><input id="inv" autocapitalize="characters" autocomplete="off"></label>
+  <div class="row"><button id="loginBtn">Enter the library</button><button id="signupBtn" class="ghost">Become a member</button></div>
+  <p id="authMsg" class="err" role="alert"></p>
 </section>
 
 <main id="app" class="hidden">
-  <nav><button data-tab="search" class="on">SEARCH</button><button data-tab="add">ADD</button><button data-tab="mine">MY BOOKS</button><button data-tab="reqs">REQUESTS</button><button data-tab="groups">GROUPS</button><button data-tab="invites">INVITE</button></nav>
+  <nav aria-label="Sections"><button data-tab="search" class="on">Catalogue</button><button data-tab="add">Accession</button><button data-tab="mine">My Shelves</button><button data-tab="reqs">Borrowing</button><button data-tab="groups">Members</button><button data-tab="invites">Invite a member</button></nav>
 
   <section id="tab-search" class="tab">
-    <input id="q" type="search" placeholder="search title or author..." autocomplete="off">
-    <div id="results"></div>
+    <label class="drawer" for="q"><span class="drawer-label">Card Catalogue · Title · Author</span>
+    <input id="q" type="search" placeholder="Search by title or author…" autocomplete="off"></label>
+    <div id="results" aria-live="polite"></div>
   </section>
 
   <section id="tab-add" class="tab hidden">
     <div class="card">
-      <h2>SCAN BARCODE</h2>
+      <h2>Scan a barcode</h2>
       <div id="reader"></div><video id="vid" playsinline muted class="hidden"></video>
-      <div class="row"><button id="scanBtn">START CAMERA</button><button id="stopBtn" class="ghost hidden">STOP</button></div>
-      <div class="row"><input id="isbnIn" inputmode="numeric" placeholder="or type ISBN"><button id="lookupBtn">LOOK UP</button></div>
-      <p id="scanMsg" class="dim"></p>
+      <div class="row"><button id="scanBtn">Open camera</button><button id="stopBtn" class="ghost hidden">Close camera</button></div>
+      <div class="row"><input id="isbnIn" inputmode="numeric" placeholder="…or type the ISBN" aria-label="ISBN"><button id="lookupBtn">Look up</button></div>
+      <p id="scanMsg" class="dim typed"></p>
     </div>
     <form id="bookForm" class="card">
-      <h2>BOOK DETAILS</h2>
+      <h2>Accession record</h2>
       <img id="coverPrev" class="cover hidden" alt="">
-      <input name="title" placeholder="title *" required>
-      <input name="author" placeholder="author">
-      <input name="isbn" placeholder="ISBN">
-      <select name="shelf_id" id="shelfSel" class="hidden"></select>
-      <input name="location" list="locs" placeholder="location, e.g. Living Room">
+      <label class="field"><span>Title *</span><input name="title" required></label>
+      <label class="field"><span>Author</span><input name="author"></label>
+      <label class="field"><span>ISBN</span><input name="isbn"></label>
+      <select name="shelf_id" id="shelfSel" class="hidden" aria-label="Shelf"></select>
+      <label class="field"><span>Shelf location</span><input name="location" list="locs" placeholder="e.g. Living Room"></label>
       <datalist id="locs"></datalist><input type="hidden" name="cover_url"><input type="hidden" name="source" value="manual">
-      <button>SAVE TO SHELF</button><p id="saveMsg" class="ok"></p>
+      <button>Shelve this book</button><p id="saveMsg" class="ok"></p>
     </form>
-    <div class="card dim small"><h2>SHELF PHOTO SCAN</h2>Coming soon: snap a whole shelf and confirm the titles. <button id="shelfBtn" class="ghost" disabled>NOT YET</button></div>
+    <div class="card dim small"><h2>Shelf photograph</h2>Coming soon: photograph a whole shelf and confirm the titles. <button id="shelfBtn" class="ghost" disabled>Not yet</button></div>
   </section>
 
   <section id="tab-mine" class="tab hidden"><div id="mine"></div></section>
   <section id="tab-reqs" class="tab hidden"><div id="reqs"></div></section>
-  <section id="tab-invites" class="tab hidden"><div class="card"><h2>INVITE FRIENDS</h2>
-    <p class="dim small">ShelfShare is invite-only. Pick a group, then generate a code. Each code works once and joins that group. People only see books from groups they share with you.</p>
-    <select id="invGroup" aria-label="group"></select><button id="newInv">GENERATE CODE</button><p id="invMsg" class="err"></p></div><div id="invites"></div></section>
+  <section id="tab-invites" class="tab hidden"><div class="card"><h2>Invite a member</h2>
+    <p class="dim small">ShelfShare is by invitation only. Choose a circle, then issue an invitation. Each one works once and admits the bearer to that circle. Members only see books from circles they share with you.</p>
+    <select id="invGroup" aria-label="Circle"></select><button id="newInv">Issue invitation</button><p id="invMsg" class="err"></p></div><div id="invites"></div></section>
   <section id="tab-groups" class="tab hidden"><div id="groups"></div>
-    <div class="card"><h2>JOIN ANOTHER GROUP</h2><p class="dim small">Got an invite code for another group? Enter it here.</p>
-    <div class="row"><input id="redeemIn" placeholder="invite code" autocapitalize="characters" autocomplete="off"><button id="redeemBtn">JOIN</button></div><p id="redeemMsg" class="ok"></p></div></section>
+    <div class="card"><h2>Join another circle</h2><p class="dim small">Hold an invitation to another circle? Enter its number here.</p>
+    <div class="row"><input id="redeemIn" placeholder="Invitation no." aria-label="Invitation number" autocapitalize="characters" autocomplete="off"><button id="redeemBtn">Join</button></div><p id="redeemMsg" class="ok"></p></div></section>
 </main>
 <script src="/static/app.js"></script>
 </body></html>

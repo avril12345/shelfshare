@@ -1,7 +1,7 @@
 # > SHELFSHARE_
 
 Share your bookshelves with friends so you can borrow instead of buy.
-It runs on Flask and SQLite, with one static page and a green-on-black terminal look that works on phones.
+It runs on Flask and SQLite, with one static page and a classic lending-library look (parchment, card-catalogue results, brass drawer tabs) that works on phones.
 
 ## Features
 - **Invite-only**: signing up needs a single-use invite code. Logged-in users open the **INVITE** tab to generate codes (up to 10 unused at a time), copy a sign-up link like `/?invite=CODE` that fills the code in, and revoke unused ones. Used codes are marked with who used them and when. The `invites` table records `created_by`, `used_by`, `used_by_name` and `used_at`.
