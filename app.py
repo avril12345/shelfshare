@@ -1,4 +1,3 @@
-import secrets
 """ShelfShare - share book libraries with friends. Flask + SQLite."""
 import os, secrets, sqlite3, json, re, urllib.request, urllib.parse
 from functools import wraps
