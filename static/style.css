@@ -12,7 +12,7 @@ input:focus{outline:2px solid var(--g);box-shadow:0 0 10px rgba(57,255,106,.4)}
 button{background:var(--g);color:#031;border:0;border-radius:4px;padding:11px 14px;font:inherit;font-weight:700;cursor:pointer;letter-spacing:.05em}
 button.ghost{background:transparent;color:var(--g);border:1px solid var(--g2)}button:disabled{opacity:.4}
 .row{display:flex;gap:8px;align-items:flex-start}.row input{flex:1}
-nav{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:12px}
+nav{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-bottom:12px}
 nav button{background:transparent;color:var(--g2);border:1px solid var(--g2);padding:9px 2px;font-size:.78rem}
 nav button.on{background:var(--g);color:#031}
 .hidden{display:none!important}.dim{color:#8fb79a}.small{font-size:.85rem}.err{color:#ff6b6b}.ok{color:var(--g)}
@@ -27,3 +27,4 @@ nav button.on{background:var(--g);color:#031}
 #reader{width:100%;margin-bottom:10px}#vid{width:100%;border:1px solid var(--g2);margin-bottom:10px}
 .loc{color:var(--amber);margin:14px 0 4px;border-bottom:1px solid #333}.mb{display:flex;justify-content:space-between;gap:8px;padding:4px 0}
 .mb button{padding:2px 8px;font-size:.7rem}
+select{width:100%;background:#050805;color:var(--g);border:1px solid var(--g2);border-radius:4px;padding:12px;font:inherit;margin:0 0 10px}

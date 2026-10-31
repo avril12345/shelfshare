@@ -9,7 +9,7 @@ import app as A
 path = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else os.path.join(A.BASE, "data", "notion_books.json")
 pw = sys.argv[sys.argv.index("--password") + 1] if "--password" in sys.argv else None
 rows = json.load(open(path))
-con = sqlite3.connect(A.DB); con.executescript(A.SCHEMA)
+con = sqlite3.connect(A.DB); A.migrate(con)
 u = con.execute("SELECT id FROM users WHERE username='Av'").fetchone()
 if u: uid = u[0]
 else:
@@ -25,5 +25,6 @@ for r in rows:
     con.execute("INSERT INTO books(owner_id,title,author,isbn,cover_url,location,source) VALUES(?,?,?,?,?,?,'notion')",
         (uid, t, r.get("Author"), isbn, f"https://covers.openlibrary.org/b/isbn/{isbn}-M.jpg" if isbn else None, r.get("Location")))
     n += 1
+A.migrate(con)  # seeds Book Club + Family once Av exists
 con.commit()
 print(f"Imported {n} new books for Av ({len(rows)} rows in file)")

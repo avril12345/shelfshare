@@ -24,8 +24,38 @@ CREATE TABLE IF NOT EXISTS borrow_requests(id INTEGER PRIMARY KEY, book_id INTEG
 CREATE TABLE IF NOT EXISTS invites(code TEXT PRIMARY KEY, created_by INTEGER REFERENCES users(id) ON DELETE CASCADE,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP, used_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   used_by_name TEXT, used_at TEXT);
+CREATE TABLE IF NOT EXISTS groups(id INTEGER PRIMARY KEY, name TEXT NOT NULL,
+  owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS group_members(group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, joined_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(group_id, user_id));
+CREATE INDEX IF NOT EXISTS gm_user ON group_members(user_id);
 """
 MAX_UNUSED_INVITES = 10
+DEFAULT_GROUPS = ("Book Club", "Family")
+# Users who share at least one group with :me (including :me)
+VISIBLE = "(SELECT gm2.user_id FROM group_members gm1 JOIN group_members gm2 ON gm2.group_id=gm1.group_id WHERE gm1.user_id=:me UNION SELECT :me)"
+
+def migrate(con):
+    """Idempotent, additive migration. Safe on an existing DB: never drops or rewrites data."""
+    con.executescript(SCHEMA)
+    cols = [r[1] for r in con.execute("PRAGMA table_info(invites)")]
+    if "group_id" not in cols:
+        con.execute("ALTER TABLE invites ADD COLUMN group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE")
+    if con.execute("PRAGMA user_version").fetchone()[0] < 1:
+        av = con.execute("SELECT id FROM users WHERE username='Av'").fetchone()
+        if av:
+            ids = {}
+            for name in DEFAULT_GROUPS:
+                r = con.execute("SELECT id FROM groups WHERE name=?", (name,)).fetchone()
+                ids[name] = r[0] if r else con.execute("INSERT INTO groups(name, owner_id) VALUES(?,?)", (name, av[0])).lastrowid
+                con.execute("INSERT OR IGNORE INTO group_members(group_id,user_id) VALUES(?,?)", (ids[name], av[0]))
+            bc = ids["Book Club"]
+            # Pre-groups users could all see each other; keep them in Book Club so nothing disappears.
+            con.execute("INSERT OR IGNORE INTO group_members(group_id,user_id) SELECT ?, id FROM users", (bc,))
+            con.execute("UPDATE invites SET group_id=? WHERE group_id IS NULL", (bc,))
+            con.execute("PRAGMA user_version=1")
+    con.commit()
 
 def db():
     if "db" not in g:
@@ -40,7 +70,22 @@ def close(_):
     if d: d.close()
 
 def init_db():
-    with app.app_context(): db().executescript(SCHEMA); db().commit()
+    with app.app_context(): migrate(db())
+
+def shares_group(a, b):
+    return a == b or db().execute("""SELECT 1 FROM group_members x JOIN group_members y ON x.group_id=y.group_id
+        WHERE x.user_id=? AND y.user_id=?""", (a, b)).fetchone() is not None
+
+def is_member(gid, uid):
+    return db().execute("SELECT 1 FROM group_members WHERE group_id=? AND user_id=?", (gid, uid)).fetchone() is not None
+
+def redeem(c, code, uid, uname):
+    """Inside a transaction: mark the invite used and join its group. Returns group name or None."""
+    inv = c.execute("SELECT i.used_at, i.group_id, g.name FROM invites i LEFT JOIN groups g ON g.id=i.group_id WHERE i.code=?", (code,)).fetchone()
+    if not inv or inv["used_at"] or not inv["group_id"]: return None
+    c.execute("UPDATE invites SET used_by=?, used_by_name=?, used_at=CURRENT_TIMESTAMP WHERE code=? AND used_at IS NULL", (uid, uname, code))
+    c.execute("INSERT OR IGNORE INTO group_members(group_id,user_id) VALUES(?,?)", (inv["group_id"], uid))
+    return inv["name"]
 
 def login_required(f):
     @wraps(f)
@@ -63,16 +108,15 @@ def signup():
     c = db().cursor()
     try:
         c.execute("BEGIN IMMEDIATE")
-        inv = c.execute("SELECT used_at FROM invites WHERE code=?", (code,)).fetchone()
-        if not inv or inv["used_at"]:
+        inv = c.execute("SELECT used_at, group_id FROM invites WHERE code=?", (code,)).fetchone()
+        if not inv or inv["used_at"] or not inv["group_id"]:
             c.execute("ROLLBACK"); return jsonify(error="That invite code is invalid or already used"), 403
-        cur = c.execute("INSERT INTO users(username,password_hash) VALUES(?,?)", (u, generate_password_hash(p)))
-        c.execute("UPDATE invites SET used_by=?, used_by_name=?, used_at=CURRENT_TIMESTAMP WHERE code=? AND used_at IS NULL",
-                  (cur.lastrowid, u, code))
+        uid = c.execute("INSERT INTO users(username,password_hash) VALUES(?,?)", (u, generate_password_hash(p))).lastrowid
+        redeem(c, code, uid, u)
         c.execute("COMMIT")
     except sqlite3.IntegrityError:
         c.execute("ROLLBACK"); return jsonify(error="That username is taken"), 409
-    session["uid"], session["name"] = cur.lastrowid, u
+    session["uid"], session["name"] = uid, u
     return jsonify(ok=True, username=u)
 
 @app.post("/api/login")
@@ -99,7 +143,8 @@ def new_code(): return "-".join(secrets.token_hex(2).upper() for _ in range(3))
 @app.get("/api/invites")
 @login_required
 def list_invites():
-    rows = db().execute("SELECT code, created_at, used_by_name, used_at FROM invites WHERE created_by=? ORDER BY used_at IS NOT NULL, created_at DESC",
+    rows = db().execute("""SELECT i.code, i.created_at, i.used_by_name, i.used_at, i.group_id, g.name group_name
+        FROM invites i LEFT JOIN groups g ON g.id=i.group_id WHERE i.created_by=? ORDER BY i.used_at IS NOT NULL, i.created_at DESC""",
                         (session["uid"],)).fetchall()
     return jsonify(invites=[dict(r) for r in rows], max_unused=MAX_UNUSED_INVITES)
 
@@ -108,8 +153,11 @@ def list_invites():
 def create_invite():
     n = db().execute("SELECT COUNT(*) FROM invites WHERE created_by=? AND used_at IS NULL", (session["uid"],)).fetchone()[0]
     if n >= MAX_UNUSED_INVITES: return jsonify(error=f"You already have {MAX_UNUSED_INVITES} unused codes"), 400
+    try: gid = int((request.get_json(silent=True) or {}).get("group_id"))
+    except (TypeError, ValueError): return jsonify(error="Pick a group for this invite"), 400
+    if not is_member(gid, session["uid"]): return jsonify(error="You can only invite people to groups you're in"), 403
     code = new_code()
-    db().execute("INSERT INTO invites(code, created_by) VALUES(?,?)", (code, session["uid"])); db().commit()
+    db().execute("INSERT INTO invites(code, created_by, group_id) VALUES(?,?,?)", (code, session["uid"], gid)); db().commit()
     return jsonify(ok=True, code=code)
 
 @app.delete("/api/invites/<code>")
@@ -117,6 +165,29 @@ def create_invite():
 def revoke_invite(code):
     db().execute("DELETE FROM invites WHERE code=? AND created_by=? AND used_at IS NULL", (code.upper(), session["uid"])); db().commit()
     return jsonify(ok=True)
+
+@app.post("/api/redeem")
+@login_required
+def redeem_invite():
+    code = ((request.get_json(silent=True) or {}).get("code") or "").strip().upper()
+    c = db().cursor(); c.execute("BEGIN IMMEDIATE")
+    name = redeem(c, code, session["uid"], session["name"])
+    if not name:
+        c.execute("ROLLBACK"); return jsonify(error="That invite code is invalid or already used"), 403
+    c.execute("COMMIT"); return jsonify(ok=True, group=name)
+
+# ---------- groups ----------
+@app.get("/api/groups")
+@login_required
+def my_groups():
+    gs = db().execute("""SELECT g.id, g.name, ou.username owner FROM groups g JOIN group_members m ON m.group_id=g.id
+        LEFT JOIN users ou ON ou.id=g.owner_id WHERE m.user_id=? ORDER BY g.name""", (session["uid"],)).fetchall()
+    out = []
+    for g_ in gs:
+        mem = db().execute("""SELECT u.username, (SELECT COUNT(*) FROM books b WHERE b.owner_id=u.id) books
+            FROM group_members m JOIN users u ON u.id=m.user_id WHERE m.group_id=? ORDER BY u.username""", (g_["id"],)).fetchall()
+        out.append(dict(g_, members=[dict(m) for m in mem]))
+    return jsonify(groups=out)
 
 # ---------- ISBN lookup ----------
 def _get(url):
@@ -188,8 +259,8 @@ def search():
     if len(q) < 2: return jsonify(query=q, results=[])
     like = f"%{q}%"
     rows = db().execute("""SELECT b.*, u.username owner FROM books b JOIN users u ON u.id=b.owner_id
-        WHERE b.title LIKE ? OR b.author LIKE ? OR b.isbn = ? ORDER BY b.title LIMIT 200""",
-        (like, like, clean_isbn(q) or "-")).fetchall()
+        WHERE (b.title LIKE :l OR b.author LIKE :l OR b.isbn = :i) AND b.owner_id IN """ + VISIBLE + """
+        ORDER BY b.title LIMIT 200""", dict(l=like, i=clean_isbn(q) or "-", me=session["uid"])).fetchall()
     groups = {}
     for r in rows:
         key = (r["title"].lower().strip(), (r["author"] or "").lower().strip())
@@ -206,6 +277,7 @@ def borrow(bid):
     b = db().execute("SELECT owner_id FROM books WHERE id=?", (bid,)).fetchone()
     if not b: return jsonify(error="No such book"), 404
     if b["owner_id"] == session["uid"]: return jsonify(error="That's your own book!"), 400
+    if not shares_group(b["owner_id"], session["uid"]): return jsonify(error="No such book"), 404
     if db().execute("SELECT 1 FROM borrow_requests WHERE book_id=? AND requester_id=? AND status='pending'", (bid, session["uid"])).fetchone():
         return jsonify(ok=True, note="Already requested")
     db().execute("INSERT INTO borrow_requests(book_id,requester_id,message) VALUES(?,?,?)",

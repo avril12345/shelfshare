@@ -13,7 +13,7 @@ $('#p').onkeydown=e=>{if(e.key==='Enter')auth('login')};
 
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b));
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('hidden',t.id!=='tab-'+b.dataset.tab));
-  if(b.dataset.tab==='mine')loadMine();if(b.dataset.tab==='reqs')loadReqs();if(b.dataset.tab==='invites')loadInv();if(b.dataset.tab!=='add')stopScan()});
+  if(b.dataset.tab==='mine')loadMine();if(b.dataset.tab==='reqs')loadReqs();if(b.dataset.tab==='invites')loadInv();if(b.dataset.tab==='groups')loadGroups();if(b.dataset.tab!=='add')stopScan()});
 
 // ---- search ----
 let st;$('#q').oninput=()=>{clearTimeout(st);st=setTimeout(doSearch,250)};
@@ -69,13 +69,20 @@ async function loadReqs(){const {incoming,outgoing}=await api('/api/requests');
   $('#reqs').querySelectorAll('[data-a]').forEach(b=>b.onclick=async()=>{await api('/api/requests/'+b.dataset.a,{method:'POST',body:{status:b.dataset.s}});loadReqs()})}
 // ---- invites ----
 const invP=new URLSearchParams(location.search).get('invite');if(invP)$('#inv').value=invP.toUpperCase();
-async function loadInv(){const {invites,max_unused}=await api('/api/invites');const base=location.origin+'/?invite=';
+async function loadInv(){const [{invites,max_unused},{groups}]=await Promise.all([api('/api/invites'),api('/api/groups')]);
+  const sel=$('#invGroup'),prev=sel.value;sel.innerHTML=groups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('');if(prev)sel.value=prev;$('#newInv').disabled=!groups.length;const base=location.origin+'/?invite=';
   const unused=invites.filter(i=>!i.used_at).length;
   $('#invites').innerHTML=`<p class="dim small">${unused}/${max_unused} unused codes</p>`+(invites.map(i=>i.used_at?
-   `<div class="mb dim"><span><s>${esc(i.code)}</s> <span class="a">[USED by ${esc(i.used_by_name||'?')} · ${esc(i.used_at)}]</span></span></div>`:
-   `<div class="card"><div class="t">${esc(i.code)} <span class="a">[UNUSED]</span></div><input readonly value="${esc(base+i.code)}" onclick="this.select()">
+   `<div class="mb dim"><span><s>${esc(i.code)}</s> <span class="a">[${esc(i.group_name||'')} · USED by ${esc(i.used_by_name||'?')} · ${esc(i.used_at)}]</span></span></div>`:
+   `<div class="card"><div class="t">${esc(i.code)} <span class="a">[UNUSED · ${esc(i.group_name||'no group')}]</span></div><input readonly value="${esc(base+i.code)}" onclick="this.select()">
     <div class="row"><button data-copy="${esc(base+i.code)}">COPY LINK</button><button class="ghost" data-rev="${esc(i.code)}">REVOKE</button></div></div>`).join('')||'<p class="dim">No codes yet.</p>');
   $('#invites').querySelectorAll('[data-copy]').forEach(b=>b.onclick=async()=>{try{await navigator.clipboard.writeText(b.dataset.copy);b.textContent='COPIED ✔'}catch{b.previousElementSibling;prompt('Copy this link:',b.dataset.copy)}});
   $('#invites').querySelectorAll('[data-rev]').forEach(b=>b.onclick=async()=>{if(confirm('Revoke this code?')){await api('/api/invites/'+b.dataset.rev,{method:'DELETE'});loadInv()}})}
-$('#newInv').onclick=async()=>{$('#invMsg').textContent='';try{await api('/api/invites',{method:'POST',body:{}});loadInv()}catch(e){$('#invMsg').textContent=e.message}};
+$('#newInv').onclick=async()=>{$('#invMsg').textContent='';try{await api('/api/invites',{method:'POST',body:{group_id:$('#invGroup').value}});loadInv()}catch(e){$('#invMsg').textContent=e.message}};
+// ---- groups ----
+async function loadGroups(){const {groups}=await api('/api/groups');
+  $('#groups').innerHTML=groups.map(g=>`<div class="card"><h2>▸ ${esc(g.name.toUpperCase())}</h2><p class="dim small">${g.members.length} members · owner ${esc(g.owner||'?')}</p>`+
+    g.members.map(m=>`<div class="mb"><span>${esc(m.username)}</span><span class="a">${m.books} books</span></div>`).join('')+`</div>`).join('')||'<p class="dim">You are not in any group yet.</p>'}
+$('#redeemBtn').onclick=async()=>{$('#redeemMsg').textContent='';try{const r=await api('/api/redeem',{method:'POST',body:{code:$('#redeemIn').value}});
+  $('#redeemMsg').textContent='✔ Joined '+r.group;$('#redeemIn').value='';loadGroups()}catch(e){$('#redeemMsg').textContent=e.message}};
 boot();

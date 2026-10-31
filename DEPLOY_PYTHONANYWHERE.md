@@ -35,3 +35,12 @@ from app import app as application
 ## 5. Reload
 Click **Reload** on the Web tab, open `https://YOURNAME.pythonanywhere.com`.
 Free plan: click "Run until 3 months from today" / extend button periodically to keep it alive.
+
+## Redeploying an update
+Your books and users live in `data/shelfshare.db`, which is not part of the code, so updating never overwrites them. Database changes (such as groups) migrate automatically when the app starts.
+1. Optional backup: in a Bash console, `cp ~/shelfshare/data/shelfshare.db ~/shelfshare.db.bak`
+2. Get the new code (pick the method you used first):
+   - **git:** `cd ~/shelfshare && git pull` (use your read-only token as the password).
+   - **zip:** upload the new `shelfshare.zip` to `/home/YOURNAME/`, then `cd ~ && unzip -o shelfshare.zip -d shelfshare`. The zip contains no `data/` folder, so your database is left alone.
+3. If `requirements.txt` changed: `~/.venvs/shelfshare/bin/pip install -r ~/shelfshare/requirements.txt`
+4. Web tab → **Reload**.

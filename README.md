@@ -5,6 +5,8 @@ It runs on Flask and SQLite, with one static page and a green-on-black terminal 
 
 ## Features
 - **Invite-only**: signing up needs a single-use invite code. Logged-in users open the **INVITE** tab to generate codes (up to 10 unused at a time), copy a sign-up link like `/?invite=CODE` that fills the code in, and revoke unused ones. Used codes are marked with who used them and when. The `invites` table records `created_by`, `used_by`, `used_by_name` and `used_at`.
+- **Groups (circles)**: users belong to one or more groups (`groups` + `group_members` tables). Av owns the seeded **Book Club** and **Family** groups and is in both. Each invite code is tied to one group, so signing up with it joins that group. Logged-in users can join another group by entering a code on the **GROUPS** tab, which also lists your groups and their members. You only see, search and request books from people who share at least one group with you, and your own books always show. Only members of a group can make codes for it.
+- **Migration**: `migrate()` runs at startup. It is additive and idempotent: it creates the new tables, adds `invites.group_id`, seeds the two groups once (`PRAGMA user_version=1`), puts any existing users in Book Club and assigns old unused codes to Book Club. No data is dropped.
 - Every book, search, borrow, request and invite API needs a login. Logged-out calls get a 401.
 - Sign up and log in. Passwords are hashed with Werkzeug PBKDF2/scrypt, and sessions use signed cookies.
 - **Add books by barcode**: the phone camera uses the native `BarcodeDetector` (Android Chrome) or falls back to `html5-qrcode` (iOS Safari and others). ISBN lookup goes to Open Library first, then Google Books. You can also type an ISBN or enter a book manually, and give each book a location.
@@ -40,5 +42,4 @@ Start command: `gunicorn -w 2 -b 0.0.0.0:$PORT app:app`. Remember to set a long 
 
 ## Next ideas
 - AI shelf-photo scanning: implement `shelf_scanner.read_spines`, then show a confirm-the-titles checklist with a spending cap.
-- Friend groups. Everyone who joins by invite can currently see everyone's books.
 - Let the NFC tags and the Raspberry Pi terminal call `/api/search`.

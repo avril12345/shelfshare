@@ -16,7 +16,7 @@
 </section>
 
 <main id="app" class="hidden">
-  <nav><button data-tab="search" class="on">SEARCH</button><button data-tab="add">ADD</button><button data-tab="mine">MY BOOKS</button><button data-tab="reqs">REQUESTS</button><button data-tab="invites">INVITE</button></nav>
+  <nav><button data-tab="search" class="on">SEARCH</button><button data-tab="add">ADD</button><button data-tab="mine">MY BOOKS</button><button data-tab="reqs">REQUESTS</button><button data-tab="groups">GROUPS</button><button data-tab="invites">INVITE</button></nav>
 
   <section id="tab-search" class="tab">
     <input id="q" type="search" placeholder="search title or author..." autocomplete="off">
@@ -47,8 +47,11 @@
   <section id="tab-mine" class="tab hidden"><div id="mine"></div></section>
   <section id="tab-reqs" class="tab hidden"><div id="reqs"></div></section>
   <section id="tab-invites" class="tab hidden"><div class="card"><h2>INVITE FRIENDS</h2>
-    <p class="dim small">ShelfShare is invite-only. Each code works once. Send a friend the link and the code fills itself in.</p>
-    <button id="newInv">GENERATE CODE</button><p id="invMsg" class="err"></p></div><div id="invites"></div></section>
+    <p class="dim small">ShelfShare is invite-only. Pick a group, then generate a code. Each code works once and joins that group. People only see books from groups they share with you.</p>
+    <select id="invGroup" aria-label="group"></select><button id="newInv">GENERATE CODE</button><p id="invMsg" class="err"></p></div><div id="invites"></div></section>
+  <section id="tab-groups" class="tab hidden"><div id="groups"></div>
+    <div class="card"><h2>JOIN ANOTHER GROUP</h2><p class="dim small">Got an invite code for another group? Enter it here.</p>
+    <div class="row"><input id="redeemIn" placeholder="invite code" autocapitalize="characters" autocomplete="off"><button id="redeemBtn">JOIN</button></div><p id="redeemMsg" class="ok"></p></div></section>
 </main>
 <script src="/static/app.js"></script>
 </body></html>
