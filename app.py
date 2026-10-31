@@ -74,6 +74,12 @@ def migrate(con):
     if "shelf_id" not in bcols:
         con.execute("ALTER TABLE books ADD COLUMN shelf_id INTEGER REFERENCES shelves(id)")
         con.commit()
+    ucols = [r[1] for r in con.execute("PRAGMA table_info(users)")]
+    if "shelf_name" not in ucols:
+        con.execute("ALTER TABLE users ADD COLUMN shelf_name TEXT")
+        con.commit()
+    con.execute("UPDATE users SET shelf_name=? WHERE lower(username)='av' AND shelf_name IS NULL", ("Avril's shelf",))
+    con.commit()
     if con.execute("PRAGMA user_version").fetchone()[0] == 1:
         migrate_v2_family_shelf(con)
 
@@ -180,7 +186,16 @@ def logout(): session.clear(); return jsonify(ok=True)
 def me():
     if not session.get("uid"): return jsonify(user=None)
     n = db().execute("SELECT COUNT(*) FROM books WHERE owner_id=? AND shelf_id IS NULL", (session["uid"],)).fetchone()[0]
-    return jsonify(user=session["name"], book_count=n, shelves=manageable_shelves())
+    sn = db().execute("SELECT COALESCE(shelf_name, username || '''s shelf') FROM users WHERE id=?", (session["uid"],)).fetchone()[0]
+    return jsonify(user=session["name"], book_count=n, shelves=manageable_shelves(), shelf_name=sn)
+
+@app.post("/api/my-shelf-name")
+@login_required
+def set_shelf_name():
+    n = ((request.get_json(silent=True) or {}).get("name") or "").strip()
+    if not n or len(n) > 60: return jsonify(error="Shelf name must be 1-60 characters"), 400
+    db().execute("UPDATE users SET shelf_name=? WHERE id=?", (n, session["uid"])); db().commit()
+    return jsonify(ok=True, shelf_name=n)
 
 # ---------- invites ----------
 def new_code(): return "-".join(secrets.token_hex(2).upper() for _ in range(3))
@@ -274,7 +289,7 @@ def manageable_shelves():
 @app.get("/api/books")
 @login_required
 def my_books():
-    rows = db().execute("""SELECT b.*, COALESCE(s.name, 'My shelf') shelf FROM books b LEFT JOIN shelves s ON s.id=b.shelf_id
+    rows = db().execute("""SELECT b.*, COALESCE(s.name, COALESCE(u.shelf_name, u.username || '''s shelf')) shelf FROM books b JOIN users u ON u.id=b.owner_id LEFT JOIN shelves s ON s.id=b.shelf_id
         WHERE """ + BOOK_MANAGED + " ORDER BY b.shelf_id IS NOT NULL, s.name, b.location, b.title", dict(me=session["uid"])).fetchall()
     return jsonify([dict(r) for r in rows])
 
@@ -314,7 +329,7 @@ def search():
     q = (request.args.get("q") or "").strip()
     if len(q) < 2: return jsonify(query=q, results=[])
     like = f"%{q}%"
-    rows = db().execute("""SELECT b.*, u.username owner, s.name shelf FROM books b JOIN users u ON u.id=b.owner_id
+    rows = db().execute("""SELECT b.*, u.username owner, s.name shelf, COALESCE(u.shelf_name, u.username || '''s shelf') pshelf FROM books b JOIN users u ON u.id=b.owner_id
         LEFT JOIN shelves s ON s.id=b.shelf_id
         WHERE (b.title LIKE :l OR b.author LIKE :l OR b.isbn = :i) AND """ + BOOK_VISIBLE + """
         ORDER BY b.title LIMIT 200""", dict(l=like, i=clean_isbn(q) or "-", me=session["uid"])).fetchall()
@@ -325,7 +340,7 @@ def search():
         g_["cover_url"] = g_["cover_url"] or r["cover_url"]
         if r["shelf_id"] is None and r["owner_id"] == session["uid"]: g_["mine"].append(dict(id=r["id"], location=r["location"]))
         else:
-            name = r["shelf"].split(" (")[0] if r["shelf"] else r["owner"]
+            name = r["shelf"].split(" (")[0] if r["shelf"] else r["pshelf"]
             g_["friends"].append(dict(id=r["id"], owner=name, shared=r["shelf_id"] is not None, location=r["location"]))
     return jsonify(query=q, results=list(groups.values()))
 
@@ -348,7 +363,7 @@ def borrow(bid):
 def requests_():
     q = """SELECT r.id, r.status, r.message, r.created_at, b.title, b.location, ru.username requester, ou.username owner
            FROM borrow_requests r JOIN books b ON b.id=r.book_id JOIN users ru ON ru.id=r.requester_id JOIN users ou ON ou.id=b.owner_id"""
-    q = q.replace("ou.username owner", "COALESCE(s.name, ou.username) owner, s.name shelf").replace(
+    q = q.replace("ou.username owner", "COALESCE(s.name, ou.username) owner, COALESCE(s.name, ou.shelf_name, ou.username || '''s shelf') shelf").replace(
         "JOIN users ou ON ou.id=b.owner_id", "JOIN users ou ON ou.id=b.owner_id LEFT JOIN shelves s ON s.id=b.shelf_id")
     inc = db().execute(q + " WHERE " + BOOK_MANAGED + " ORDER BY r.created_at DESC", dict(me=session["uid"])).fetchall()
     out = db().execute(q + " WHERE r.requester_id=:me ORDER BY r.created_at DESC", dict(me=session["uid"])).fetchall()

@@ -6,7 +6,7 @@ async function boot(){const m=await api('/api/me');
   if(m.user){$('#auth').classList.add('hidden');$('#app').classList.remove('hidden');
     $('#who').innerHTML=`<span class="dim small">${esc(m.user)} · ${m.book_count} volumes</span><br><button class="ghost" id="out">Leave library</button>`;
     $('#out').onclick=async()=>{await api('/api/logout',{method:'POST'});location.reload()};loadLocs();
-    const ss=$('#shelfSel'),pv=ss.value;ss.innerHTML='<option value="">My shelf</option>'+(m.shelves||[]).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');if(pv)ss.value=pv;ss.classList.toggle('hidden',!(m.shelves||[]).length)}
+    const ss=$('#shelfSel'),pv=ss.value;ss.innerHTML='<option value="">'+esc(m.shelf_name||'My shelf')+'</option>'+(m.shelves||[]).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');if(pv)ss.value=pv;ss.classList.toggle('hidden',!(m.shelves||[]).length)}
   else{$('#auth').classList.remove('hidden');$('#app').classList.add('hidden');$('#who').innerHTML=''}}
 async function auth(kind){try{await api('/api/'+kind,{method:'POST',body:{username:$('#u').value,password:$('#p').value,invite:$('#inv').value}});boot()}catch(e){$('#authMsg').textContent=e.message}}
 $('#loginBtn').onclick=()=>auth('login');$('#signupBtn').onclick=()=>auth('signup');
@@ -60,10 +60,11 @@ $('#scanBtn').onclick=startScan;$('#stopBtn').onclick=stopScan;
 // ---- my books ----
 async function loadMine(){const b=await api('/api/books');const groups=new Map();
   for(const x of b){const k=x.shelf+'\u0000'+(x.location||'Unshelved');if(!groups.has(k))groups.set(k,[]);groups.get(k).push(x)}
-  const sp=['#1f3a2c','#7a1f1f','#2c3e5c','#6b4a2b','#4a3b5c','#8a6a22'];let i=0,h=`<p class="dim">${b.length} volumes across ${groups.size} shelves</p>`;
+  const sp=['#1f3a2c','#7a1f1f','#2c3e5c','#6b4a2b','#4a3b5c','#8a6a22'];let i=0,h=`<p class="dim">${b.length} volumes across ${groups.size} shelves</p><form id="shelfNameForm" class="shelf-name"><label>Your shelf is called <input name="n" maxlength="60" required></label> <button>Re-letter plate</button> <span id="snMsg" class="dim"></span></form>`;
   for(const [k,xs] of groups){const [sh,loc]=k.split('\u0000');h+=`<div class="shelf"><span class="shelf-plate">${esc(loc)}</span><span class="shelf-sub">${esc(sh)} · ${xs.length}</span><div class="shelf-books">`+
     xs.map(x=>`<div class="mb" style="--sp:${sp[i++%sp.length]}"><span>${esc(x.title)} <span class="a">${esc(x.author||'')}</span></span><button class="ghost" data-del="${x.id}" aria-label="Withdraw ${esc(x.title)}">Withdraw</button></div>`).join('')+`</div></div>`}
-  $('#mine').innerHTML=h;$('#mine').querySelectorAll('[data-del]').forEach(d=>d.onclick=async()=>{if(confirm('Withdraw this book from your shelves?')){await api('/api/books/'+d.dataset.del,{method:'DELETE'});loadMine();boot()}})}
+  $('#mine').innerHTML=h;api('/api/me').then(m=>{$('#shelfNameForm').n.value=m.shelf_name||''});
+  $('#shelfNameForm').onsubmit=async e=>{e.preventDefault();try{await api('/api/my-shelf-name',{method:'POST',body:{name:e.target.n.value}});$('#snMsg').textContent='✔ Plate re-lettered';loadMine();boot()}catch(x){$('#snMsg').textContent=x.message}};$('#mine').querySelectorAll('[data-del]').forEach(d=>d.onclick=async()=>{if(confirm('Withdraw this book from your shelves?')){await api('/api/books/'+d.dataset.del,{method:'DELETE'});loadMine();boot()}})}
 
 // ---- requests ----
 async function loadReqs(){const {incoming,outgoing}=await api('/api/requests');
