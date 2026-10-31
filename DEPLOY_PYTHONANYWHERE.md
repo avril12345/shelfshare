@@ -44,3 +44,6 @@ Your books and users live in `data/shelfshare.db`, which is not part of the code
    - **zip:** upload the new `shelfshare.zip` to `/home/YOURNAME/`, then `cd ~ && unzip -o shelfshare.zip -d shelfshare`. The zip contains no `data/` folder, so your database is left alone.
 3. If `requirements.txt` changed: `~/.venvs/shelfshare/bin/pip install -r ~/shelfshare/requirements.txt`
 4. Web tab → **Reload**.
+
+### Shared shelves update (Family home)
+On first start after this update the app automatically: saves a backup to `data/shelfshare.db.pre-v2.bak`, creates the "Family home (Hordle)" shelf (Family group, managed by Av), and moves every Av book whose location contains "Hordle UK" onto it. It runs once (DB `user_version` 2) and only sets a column; no rows are deleted. The Web tab's server log shows `migration v2: moved N ...`.

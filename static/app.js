@@ -5,7 +5,8 @@ async function api(path,opts={}){const r=await fetch(path,{headers:{'Content-Typ
 async function boot(){const m=await api('/api/me');
   if(m.user){$('#auth').classList.add('hidden');$('#app').classList.remove('hidden');
     $('#who').innerHTML=`<span class="dim small">${esc(m.user)} · ${m.book_count} books</span> <button class="ghost" id="out" style="padding:4px 8px;font-size:.7rem">EXIT</button>`;
-    $('#out').onclick=async()=>{await api('/api/logout',{method:'POST'});location.reload()};loadLocs()}
+    $('#out').onclick=async()=>{await api('/api/logout',{method:'POST'});location.reload()};loadLocs();
+    const ss=$('#shelfSel'),pv=ss.value;ss.innerHTML='<option value="">My shelf</option>'+(m.shelves||[]).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');if(pv)ss.value=pv;ss.classList.toggle('hidden',!(m.shelves||[]).length)}
   else{$('#auth').classList.remove('hidden');$('#app').classList.add('hidden');$('#who').innerHTML=''}}
 async function auth(kind){try{await api('/api/'+kind,{method:'POST',body:{username:$('#u').value,password:$('#p').value,invite:$('#inv').value}});boot()}catch(e){$('#authMsg').textContent=e.message}}
 $('#loginBtn').onclick=()=>auth('login');$('#signupBtn').onclick=()=>auth('signup');
@@ -25,7 +26,7 @@ async function doSearch(){const q=$('#q').value.trim(),el=$('#results');if(q.len
    <div class="res">${r.cover_url?`<img class="cover" src="${esc(r.cover_url)}" onerror="this.style.visibility='hidden'" alt="">`:'<div class="cover"></div>'}
    <div><div class="t">${esc(r.title)}</div><div class="a">${esc(r.author||'')}</div>
    ${r.mine.map(m=>`<div class="yes">✔ You own it — ${esc(m.location||'no location set')}</div>`).join('')}
-   ${r.friends.map(f=>`<div class="friend">◆ ${esc(f.owner)} has a copy${f.location?' ('+esc(f.location)+')':''}<button data-borrow="${f.id}">REQUEST TO BORROW</button></div>`).join('')}
+   ${r.friends.map(f=>`<div class="friend">◆ ${esc(f.owner)} has a copy${f.location?(f.shared?' — '+esc(f.location):' ('+esc(f.location)+')'):''}<button data-borrow="${f.id}">REQUEST TO BORROW</button></div>`).join('')}
    ${!r.mine.length&&!r.friends.length?'<div class="none">Nobody has this yet</div>':''}</div></div>`).join('');
   el.querySelectorAll('[data-borrow]').forEach(b=>b.onclick=async()=>{try{const j=await api('/api/borrow/'+b.dataset.borrow,{method:'POST',body:{}});b.textContent=j.note?'ALREADY ASKED':'REQUESTED ✔';b.disabled=true}catch(e){alert(e.message)}})}
 
@@ -38,7 +39,7 @@ async function lookup(code){const isbn=(code||'').replace(/[^0-9Xx]/g,'');$('#sc
   catch(e){fill({isbn});$('#scanMsg').textContent='> '+e.message}}
 $('#lookupBtn').onclick=()=>lookup($('#isbnIn').value);
 $('#bookForm').onsubmit=async e=>{e.preventDefault();const f=e.target,body=Object.fromEntries(new FormData(f));
-  try{await api('/api/books',{method:'POST',body});$('#saveMsg').textContent=`✔ Saved "${body.title}"`;const loc=f.location.value;f.reset();f.location.value=loc;$('#coverPrev').classList.add('hidden');boot()}
+  try{await api('/api/books',{method:'POST',body});$('#saveMsg').textContent=`✔ Saved "${body.title}"`;const loc=f.location.value,sh=f.shelf_id.value;f.reset();f.location.value=loc;f.shelf_id.value=sh;$('#coverPrev').classList.add('hidden');boot()}
   catch(err){$('#saveMsg').textContent=err.message}};
 
 // Camera: native BarcodeDetector where available (Android Chrome), html5-qrcode fallback (iOS Safari etc.)
@@ -58,13 +59,13 @@ $('#scanBtn').onclick=startScan;$('#stopBtn').onclick=stopScan;
 
 // ---- my books ----
 async function loadMine(){const b=await api('/api/books');let cur=null,h=`<p class="dim">${b.length} books</p>`;
-  for(const x of b){const l=x.location||'(no location)';if(l!==cur){h+=`<div class="loc">▸ ${esc(l)}</div>`;cur=l}
+  for(const x of b){const l=`[${x.shelf}] `+(x.location||'(no location)');if(l!==cur){h+=`<div class="loc">▸ ${esc(l)}</div>`;cur=l}
     h+=`<div class="mb"><span>${esc(x.title)} <span class="a">${esc(x.author||'')}</span></span><button class="ghost" data-del="${x.id}">DEL</button></div>`}
   $('#mine').innerHTML=h;$('#mine').querySelectorAll('[data-del]').forEach(d=>d.onclick=async()=>{if(confirm('Remove this book?')){await api('/api/books/'+d.dataset.del,{method:'DELETE'});loadMine();boot()}})}
 
 // ---- requests ----
 async function loadReqs(){const {incoming,outgoing}=await api('/api/requests');
-  const row=(r,mine)=>`<div class="mb"><span>${mine?`<b>${esc(r.requester)}</b> wants`:`You asked <b>${esc(r.owner)}</b> for`} “${esc(r.title)}” <span class="a">[${r.status}]</span></span>${mine&&r.status==='pending'?`<span><button data-a="${r.id}" data-s="approved">OK</button> <button class="ghost" data-a="${r.id}" data-s="declined">NO</button></span>`:''}</div>`;
+  const row=(r,mine)=>`<div class="mb"><span>${mine?`<b>${esc(r.requester)}</b> wants${r.shelf?' from '+esc(r.shelf):''}`:`You asked <b>${esc(r.owner)}</b> for`} “${esc(r.title)}” <span class="a">[${r.status}]</span></span>${mine&&r.status==='pending'?`<span><button data-a="${r.id}" data-s="approved">OK</button> <button class="ghost" data-a="${r.id}" data-s="declined">NO</button></span>`:''}</div>`;
   $('#reqs').innerHTML=`<div class="card"><h2>FRIENDS ASKING YOU</h2>${incoming.map(r=>row(r,1)).join('')||'<p class="dim">None yet.</p>'}</div><div class="card"><h2>YOUR REQUESTS</h2>${outgoing.map(r=>row(r,0)).join('')||'<p class="dim">None yet.</p>'}</div>`;
   $('#reqs').querySelectorAll('[data-a]').forEach(b=>b.onclick=async()=>{await api('/api/requests/'+b.dataset.a,{method:'POST',body:{status:b.dataset.s}});loadReqs()})}
 // ---- invites ----

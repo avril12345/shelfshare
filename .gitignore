@@ -8,3 +8,4 @@ data/notion_books.json
 .env
 *.env
 secrets*
+data/*.bak

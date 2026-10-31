@@ -37,9 +37,10 @@
       <input name="title" placeholder="title *" required>
       <input name="author" placeholder="author">
       <input name="isbn" placeholder="ISBN">
+      <select name="shelf_id" id="shelfSel" class="hidden"></select>
       <input name="location" list="locs" placeholder="location, e.g. Living Room">
       <datalist id="locs"></datalist><input type="hidden" name="cover_url"><input type="hidden" name="source" value="manual">
-      <button>SAVE TO MY SHELF</button><p id="saveMsg" class="ok"></p>
+      <button>SAVE TO SHELF</button><p id="saveMsg" class="ok"></p>
     </form>
     <div class="card dim small"><h2>SHELF PHOTO SCAN</h2>Coming soon: snap a whole shelf and confirm the titles. <button id="shelfBtn" class="ghost" disabled>NOT YET</button></div>
   </section>

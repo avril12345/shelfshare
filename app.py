@@ -30,11 +30,23 @@ CREATE TABLE IF NOT EXISTS group_members(group_id INTEGER NOT NULL REFERENCES gr
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, joined_at TEXT DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY(group_id, user_id));
 CREATE INDEX IF NOT EXISTS gm_user ON group_members(user_id);
+CREATE TABLE IF NOT EXISTS shelves(id INTEGER PRIMARY KEY, name TEXT NOT NULL,
+  group_id INTEGER NOT NULL REFERENCES groups(id), created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS shelf_managers(shelf_id INTEGER NOT NULL REFERENCES shelves(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, PRIMARY KEY(shelf_id, user_id));
 """
 MAX_UNUSED_INVITES = 10
 DEFAULT_GROUPS = ("Book Club", "Family")
 # Users who share at least one group with :me (including :me)
 VISIBLE = "(SELECT gm2.user_id FROM group_members gm1 JOIN group_members gm2 ON gm2.group_id=gm1.group_id WHERE gm1.user_id=:me UNION SELECT :me)"
+# Shared household shelves visible to :me (via group membership)
+MY_SHELVES = "(SELECT s.id FROM shelves s JOIN group_members gm ON gm.group_id=s.group_id WHERE gm.user_id=:me)"
+# Shared shelves :me manages (manager AND still in the shelf's group)
+MANAGED = "(SELECT s.id FROM shelves s JOIN shelf_managers sm ON sm.shelf_id=s.id JOIN group_members gm ON gm.group_id=s.group_id AND gm.user_id=sm.user_id WHERE sm.user_id=:me)"
+BOOK_VISIBLE = "((b.shelf_id IS NULL AND b.owner_id IN " + VISIBLE + ") OR b.shelf_id IN " + MY_SHELVES + ")"
+BOOK_MANAGED = "((b.shelf_id IS NULL AND b.owner_id=:me) OR b.shelf_id IN " + MANAGED + ")"
+FAMILY_SHELF = "Family home (Hordle)"
+HORDLE_PATTERN = "%Hordle UK%"
 
 def migrate(con):
     """Idempotent, additive migration. Safe on an existing DB: never drops or rewrites data."""
@@ -56,6 +68,37 @@ def migrate(con):
             con.execute("UPDATE invites SET group_id=? WHERE group_id IS NULL", (bc,))
             con.execute("PRAGMA user_version=1")
     con.commit()
+    bcols = [r[1] for r in con.execute("PRAGMA table_info(books)")]
+    if "shelf_id" not in bcols:
+        con.execute("ALTER TABLE books ADD COLUMN shelf_id INTEGER REFERENCES shelves(id)")
+        con.commit()
+    if con.execute("PRAGMA user_version").fetchone()[0] == 1:
+        migrate_v2_family_shelf(con)
+
+def migrate_v2_family_shelf(con):
+    """One-time: create the Family home shelf and move Av's Hordle UK books onto it.
+    Only sets books.shelf_id (no rows deleted or rewritten); runs in one transaction; bumps user_version to 2."""
+    av = con.execute("SELECT id FROM users WHERE username='Av'").fetchone()
+    fam = con.execute("SELECT id FROM groups WHERE name='Family'").fetchone()
+    if not av or not fam: return
+    if DB != ":memory:" and os.path.exists(DB):
+        bak = DB + ".pre-v2.bak"
+        if not os.path.exists(bak):
+            b = sqlite3.connect(bak); con.backup(b); b.close()
+    before = con.execute("SELECT COUNT(*) FROM books").fetchone()[0]
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        r = con.execute("SELECT id FROM shelves WHERE name=?", (FAMILY_SHELF,)).fetchone()
+        sid = r[0] if r else con.execute("INSERT INTO shelves(name, group_id) VALUES(?,?)", (FAMILY_SHELF, fam[0])).lastrowid
+        con.execute("INSERT OR IGNORE INTO shelf_managers(shelf_id,user_id) VALUES(?,?)", (sid, av[0]))
+        moved = con.execute("UPDATE books SET shelf_id=? WHERE owner_id=? AND shelf_id IS NULL AND location LIKE ?",
+                            (sid, av[0], HORDLE_PATTERN)).rowcount
+        if con.execute("SELECT COUNT(*) FROM books").fetchone()[0] != before: raise RuntimeError("book count changed")
+        con.execute("PRAGMA user_version=2")
+        con.execute("COMMIT")
+        print(f"[shelfshare] migration v2: moved {moved} Hordle UK books to '{FAMILY_SHELF}'")
+    except Exception:
+        con.execute("ROLLBACK"); raise
 
 def db():
     if "db" not in g:
@@ -134,8 +177,8 @@ def logout(): session.clear(); return jsonify(ok=True)
 @app.get("/api/me")
 def me():
     if not session.get("uid"): return jsonify(user=None)
-    n = db().execute("SELECT COUNT(*) FROM books WHERE owner_id=?", (session["uid"],)).fetchone()[0]
-    return jsonify(user=session["name"], book_count=n)
+    n = db().execute("SELECT COUNT(*) FROM books WHERE owner_id=? AND shelf_id IS NULL", (session["uid"],)).fetchone()[0]
+    return jsonify(user=session["name"], book_count=n, shelves=manageable_shelves())
 
 # ---------- invites ----------
 def new_code(): return "-".join(secrets.token_hex(2).upper() for _ in range(3))
@@ -184,9 +227,10 @@ def my_groups():
         LEFT JOIN users ou ON ou.id=g.owner_id WHERE m.user_id=? ORDER BY g.name""", (session["uid"],)).fetchall()
     out = []
     for g_ in gs:
-        mem = db().execute("""SELECT u.username, (SELECT COUNT(*) FROM books b WHERE b.owner_id=u.id) books
+        mem = db().execute("""SELECT u.username, (SELECT COUNT(*) FROM books b WHERE b.owner_id=u.id AND b.shelf_id IS NULL) books
             FROM group_members m JOIN users u ON u.id=m.user_id WHERE m.group_id=? ORDER BY u.username""", (g_["id"],)).fetchall()
-        out.append(dict(g_, members=[dict(m) for m in mem]))
+        sh = db().execute("SELECT s.id, s.name, (SELECT COUNT(*) FROM books b WHERE b.shelf_id=s.id) books FROM shelves s WHERE s.group_id=?", (g_["id"],)).fetchall()
+        out.append(dict(g_, members=[dict(m) for m in mem], shelves=[dict(x) for x in sh]))
     return jsonify(groups=out)
 
 # ---------- ISBN lookup ----------
@@ -221,10 +265,15 @@ def isbn(raw):
     return (jsonify(r) if r else (jsonify(error="Not found - enter it manually", isbn=i), 404))
 
 # ---------- books ----------
+def manageable_shelves():
+    rows = db().execute("SELECT s.id, s.name FROM shelves s WHERE s.id IN " + MANAGED + " ORDER BY s.name", dict(me=session["uid"])).fetchall()
+    return [dict(r) for r in rows]
+
 @app.get("/api/books")
 @login_required
 def my_books():
-    rows = db().execute("SELECT * FROM books WHERE owner_id=? ORDER BY location, title", (session["uid"],)).fetchall()
+    rows = db().execute("""SELECT b.*, COALESCE(s.name, 'My shelf') shelf FROM books b LEFT JOIN shelves s ON s.id=b.shelf_id
+        WHERE """ + BOOK_MANAGED + " ORDER BY b.shelf_id IS NOT NULL, s.name, b.location, b.title", dict(me=session["uid"])).fetchall()
     return jsonify([dict(r) for r in rows])
 
 @app.post("/api/books")
@@ -233,22 +282,27 @@ def add_book():
     d = request.get_json(force=True)
     t = (d.get("title") or "").strip()
     if not t: return jsonify(error="Title is required"), 400
-    cur = db().execute("INSERT INTO books(owner_id,title,author,isbn,cover_url,location,source) VALUES(?,?,?,?,?,?,?)",
+    sid = d.get("shelf_id") or None
+    if sid is not None:
+        try: sid = int(sid)
+        except (TypeError, ValueError): return jsonify(error="Bad shelf"), 400
+        if sid not in [x["id"] for x in manageable_shelves()]: return jsonify(error="You don't manage that shelf"), 403
+    cur = db().execute("INSERT INTO books(owner_id,title,author,isbn,cover_url,location,source,shelf_id) VALUES(?,?,?,?,?,?,?,?)",
         (session["uid"], t, (d.get("author") or "").strip() or None, clean_isbn(d.get("isbn")) or None,
-         d.get("cover_url") or None, (d.get("location") or "").strip() or None, d.get("source") or "manual"))
+         d.get("cover_url") or None, (d.get("location") or "").strip() or None, d.get("source") or "manual", sid))
     db().commit()
     return jsonify(id=cur.lastrowid, ok=True)
 
 @app.delete("/api/books/<int:bid>")
 @login_required
 def del_book(bid):
-    db().execute("DELETE FROM books WHERE id=? AND owner_id=?", (bid, session["uid"])); db().commit()
+    db().execute("DELETE FROM books WHERE id=:bid AND id IN (SELECT b.id FROM books b WHERE " + BOOK_MANAGED + ")", dict(bid=bid, me=session["uid"])); db().commit()
     return jsonify(ok=True)
 
 @app.get("/api/locations")
 @login_required
 def locations():
-    rows = db().execute("SELECT DISTINCT location FROM books WHERE owner_id=? AND location IS NOT NULL ORDER BY 1", (session["uid"],))
+    rows = db().execute("SELECT DISTINCT b.location FROM books b WHERE " + BOOK_MANAGED + " AND b.location IS NOT NULL ORDER BY 1", dict(me=session["uid"]))
     return jsonify([r[0] for r in rows])
 
 # ---------- search ----------
@@ -258,26 +312,29 @@ def search():
     q = (request.args.get("q") or "").strip()
     if len(q) < 2: return jsonify(query=q, results=[])
     like = f"%{q}%"
-    rows = db().execute("""SELECT b.*, u.username owner FROM books b JOIN users u ON u.id=b.owner_id
-        WHERE (b.title LIKE :l OR b.author LIKE :l OR b.isbn = :i) AND b.owner_id IN """ + VISIBLE + """
+    rows = db().execute("""SELECT b.*, u.username owner, s.name shelf FROM books b JOIN users u ON u.id=b.owner_id
+        LEFT JOIN shelves s ON s.id=b.shelf_id
+        WHERE (b.title LIKE :l OR b.author LIKE :l OR b.isbn = :i) AND """ + BOOK_VISIBLE + """
         ORDER BY b.title LIMIT 200""", dict(l=like, i=clean_isbn(q) or "-", me=session["uid"])).fetchall()
     groups = {}
     for r in rows:
         key = (r["title"].lower().strip(), (r["author"] or "").lower().strip())
         g_ = groups.setdefault(key, dict(title=r["title"], author=r["author"], cover_url=r["cover_url"], mine=[], friends=[]))
         g_["cover_url"] = g_["cover_url"] or r["cover_url"]
-        if r["owner_id"] == session["uid"]: g_["mine"].append(dict(id=r["id"], location=r["location"]))
-        else: g_["friends"].append(dict(id=r["id"], owner=r["owner"], location=r["location"]))
+        if r["shelf_id"] is None and r["owner_id"] == session["uid"]: g_["mine"].append(dict(id=r["id"], location=r["location"]))
+        else:
+            name = r["shelf"].split(" (")[0] if r["shelf"] else r["owner"]
+            g_["friends"].append(dict(id=r["id"], owner=name, shared=r["shelf_id"] is not None, location=r["location"]))
     return jsonify(query=q, results=list(groups.values()))
 
 # ---------- borrow requests ----------
 @app.post("/api/borrow/<int:bid>")
 @login_required
 def borrow(bid):
-    b = db().execute("SELECT owner_id FROM books WHERE id=?", (bid,)).fetchone()
-    if not b: return jsonify(error="No such book"), 404
-    if b["owner_id"] == session["uid"]: return jsonify(error="That's your own book!"), 400
-    if not shares_group(b["owner_id"], session["uid"]): return jsonify(error="No such book"), 404
+    me_ = dict(bid=bid, me=session["uid"])
+    if not db().execute("SELECT 1 FROM books b WHERE b.id=:bid AND " + BOOK_VISIBLE, me_).fetchone(): return jsonify(error="No such book"), 404
+    if db().execute("SELECT 1 FROM books b WHERE b.id=:bid AND " + BOOK_MANAGED, me_).fetchone():
+        return jsonify(error="That's on a shelf you manage!"), 400
     if db().execute("SELECT 1 FROM borrow_requests WHERE book_id=? AND requester_id=? AND status='pending'", (bid, session["uid"])).fetchone():
         return jsonify(ok=True, note="Already requested")
     db().execute("INSERT INTO borrow_requests(book_id,requester_id,message) VALUES(?,?,?)",
@@ -289,8 +346,10 @@ def borrow(bid):
 def requests_():
     q = """SELECT r.id, r.status, r.message, r.created_at, b.title, b.location, ru.username requester, ou.username owner
            FROM borrow_requests r JOIN books b ON b.id=r.book_id JOIN users ru ON ru.id=r.requester_id JOIN users ou ON ou.id=b.owner_id"""
-    inc = db().execute(q + " WHERE b.owner_id=? ORDER BY r.created_at DESC", (session["uid"],)).fetchall()
-    out = db().execute(q + " WHERE r.requester_id=? ORDER BY r.created_at DESC", (session["uid"],)).fetchall()
+    q = q.replace("ou.username owner", "COALESCE(s.name, ou.username) owner, s.name shelf").replace(
+        "JOIN users ou ON ou.id=b.owner_id", "JOIN users ou ON ou.id=b.owner_id LEFT JOIN shelves s ON s.id=b.shelf_id")
+    inc = db().execute(q + " WHERE " + BOOK_MANAGED + " ORDER BY r.created_at DESC", dict(me=session["uid"])).fetchall()
+    out = db().execute(q + " WHERE r.requester_id=:me ORDER BY r.created_at DESC", dict(me=session["uid"])).fetchall()
     return jsonify(incoming=[dict(r) for r in inc], outgoing=[dict(r) for r in out])
 
 @app.post("/api/requests/<int:rid>")
@@ -298,8 +357,8 @@ def requests_():
 def answer(rid):
     st = (request.get_json(force=True).get("status"))
     if st not in ("approved", "declined", "returned"): return jsonify(error="bad status"), 400
-    db().execute("""UPDATE borrow_requests SET status=? WHERE id=? AND book_id IN (SELECT id FROM books WHERE owner_id=?)""",
-                 (st, rid, session["uid"])); db().commit()
+    db().execute("UPDATE borrow_requests SET status=:st WHERE id=:rid AND book_id IN (SELECT b.id FROM books b WHERE " + BOOK_MANAGED + ")",
+                 dict(st=st, rid=rid, me=session["uid"])); db().commit()
     return jsonify(ok=True)
 
 # ---------- future: AI shelf-photo scanner ----------
