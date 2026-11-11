@@ -72,3 +72,46 @@ nav button.on{background:var(--card);color:var(--ox);box-shadow:inset 0 0 0 2px 
 #reader{width:100%;margin-bottom:10px}#vid{width:100%;border:1px solid var(--brass2);margin-bottom:10px}
 .ticket{font-family:var(--type);font-size:1.3rem;letter-spacing:.12em;color:var(--ox)}
 .shelf-name{margin:.4em 0 1em;font-style:italic}.shelf-name input{width:auto;min-width:12em;font-family:inherit}
+
+/* 8 drawer tabs: 3 across on phones, 4 across on wider screens */
+@media(min-width:560px){nav{grid-template-columns:repeat(4,1fr)}}
+
+/* Friends picker */
+.pick{border:0;padding:0;margin:0 0 12px;display:flex;flex-wrap:wrap;gap:6px 14px}
+.pick legend{padding:0;width:100%}
+.pick label{display:flex;align-items:center;gap:6px;font-family:var(--type);font-size:.9rem}
+.pick input{width:auto;margin:0}
+
+/* Book clubs (group chats) */
+.club-item{display:block;width:100%;text-align:left;margin:0 0 10px;background:var(--card);color:var(--ink);border:1px solid #d8c9a3;border-left:6px solid var(--green);
+ box-shadow:0 2px 6px rgba(60,40,10,.12);font-weight:400}
+.club-item:hover{background:#fffdf5}
+.club-name{display:block;font-weight:600;color:var(--green);font-variant:small-caps;font-size:1.1rem}
+.club-last{display:block;font-family:var(--type);font-size:.8rem;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.new-dot{color:var(--ox);font-size:.8rem}
+.chat-head{display:flex;gap:10px;align-items:flex-start;margin-bottom:8px}.chat-head>div{flex:1;min-width:0}
+.chat-head button{padding:4px 10px;font-size:.85rem}.chat-head h2{margin-bottom:2px}
+.chat-log{background:#fffdf5;border:1px solid #d6cbb0;border-radius:3px;padding:10px;height:55vh;min-height:240px;overflow-y:auto;
+ background-image:repeating-linear-gradient(transparent 0 25px,var(--rule) 25px 26px)}
+.msg{max-width:85%;margin:0 auto 10px 0;background:#f3e3b5;border:1px solid var(--brass2);border-left:5px solid var(--ox);padding:6px 10px;border-radius:2px}
+.msg.me{margin:0 0 10px auto;background:var(--card);border-left:1px solid var(--brass2);border-right:5px solid var(--green)}
+.msg.sys{max-width:none;margin:0 0 10px;background:none;border:0;text-align:center;font:italic .85rem var(--serif);color:var(--ink2)}
+.msg-meta{font-family:var(--type);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;color:var(--ink2)}
+.msg-body{white-space:pre-wrap;overflow-wrap:anywhere}
+.chat-form{display:flex;gap:8px;margin:10px 0 14px;align-items:stretch}
+.chat-form textarea{flex:1;min-width:0;resize:vertical;background:#fffdf6;color:var(--ink);border:1px solid var(--ink2);border-radius:2px;padding:8px;font:16px var(--type)}
+.chat-form textarea:focus{outline:3px solid var(--brass);outline-offset:2px}
+.club-settings summary{cursor:pointer;font-variant:small-caps;color:var(--green);font-weight:600}
+.club-settings .row{margin-top:10px}.club-settings select{flex:1;min-width:140px;width:auto}
+
+/* Star ratings */
+.stars{display:inline-flex;gap:1px;margin:4px 0 0 6px;vertical-align:middle}
+.stars button{background:none;border:0;box-shadow:none;padding:2px 1px;font-size:1.15rem;line-height:1;color:#c9b88f;cursor:pointer}
+.stars button.on{color:var(--brass2)}
+.stars:hover button{color:var(--brass2)}.stars button:hover~button{color:#c9b88f}
+.stars button:hover{background:none}
+.res .stars{display:flex;margin:6px 0 0}
+.shelf-books .mb .stars{display:flex;margin:2px 0 0}
+.net-avg{display:inline-block;font-family:var(--type);font-size:.75rem;color:var(--ink2);margin-top:2px}
+.sugg-head{margin-top:4px}
+.why{font-style:italic;color:var(--green);font-size:.92rem;margin-top:4px}

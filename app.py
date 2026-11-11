@@ -36,11 +36,27 @@ CREATE TABLE IF NOT EXISTS shelves(id INTEGER PRIMARY KEY, name TEXT NOT NULL,
   group_id INTEGER NOT NULL REFERENCES groups(id), created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS shelf_managers(shelf_id INTEGER NOT NULL REFERENCES shelves(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, PRIMARY KEY(shelf_id, user_id));
+CREATE TABLE IF NOT EXISTS friendships(from_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  to_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, status TEXT NOT NULL DEFAULT 'pending',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(from_id, to_id));
+CREATE INDEX IF NOT EXISTS fr_to ON friendships(to_id);
+CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL, body TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS msg_group ON messages(group_id, id);
+CREATE TABLE IF NOT EXISTS ratings(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, work_key TEXT NOT NULL,
+  title TEXT NOT NULL, author TEXT, cover_url TEXT, stars INTEGER NOT NULL CHECK(stars BETWEEN 1 AND 5),
+  rated_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(user_id, work_key));
+CREATE INDEX IF NOT EXISTS ratings_work ON ratings(work_key);
 """
+MAX_MSG = 2000
+MAX_CLUB_MEMBERS = 50
+# Accepted friends of :me
+FRIENDS_SEL = "SELECT to_id FROM friendships WHERE from_id=:me AND status='accepted' UNION SELECT from_id FROM friendships WHERE to_id=:me AND status='accepted'"
+FRIENDS = "(" + FRIENDS_SEL + ")"
 MAX_UNUSED_INVITES = 10
 DEFAULT_GROUPS = ("Book Club", "Family")
-# Users who share at least one group with :me (including :me)
-VISIBLE = "(SELECT gm2.user_id FROM group_members gm1 JOIN group_members gm2 ON gm2.group_id=gm1.group_id WHERE gm1.user_id=:me UNION SELECT :me)"
+# Users whose personal shelf :me can see: anyone sharing a circle or book club with :me, accepted friends, and :me
+VISIBLE = "(SELECT gm2.user_id FROM group_members gm1 JOIN group_members gm2 ON gm2.group_id=gm1.group_id WHERE gm1.user_id=:me UNION " + FRIENDS_SEL + " UNION SELECT :me)"
 # Shared household shelves visible to :me (via group membership)
 MY_SHELVES = "(SELECT s.id FROM shelves s JOIN group_members gm ON gm.group_id=s.group_id WHERE gm.user_id=:me)"
 # Shared shelves :me manages (manager AND still in the shelf's group)
@@ -80,6 +96,10 @@ def migrate(con):
         con.commit()
     con.execute("UPDATE users SET shelf_name=? WHERE lower(username)='av' AND shelf_name IS NULL", ("Avril's shelf",))
     con.commit()
+    gcols = [r[1] for r in con.execute("PRAGMA table_info(groups)")]
+    if "kind" not in gcols:  # 'circle' = invite-code circle (Book Club, Family); 'club' = chat-style mini book club
+        con.execute("ALTER TABLE groups ADD COLUMN kind TEXT NOT NULL DEFAULT 'circle'")
+        con.commit()
     if con.execute("PRAGMA user_version").fetchone()[0] == 1:
         migrate_v2_family_shelf(con)
 
@@ -146,6 +166,20 @@ def login_required(f):
     return w
 
 def clean_isbn(s): return re.sub(r"[^0-9Xx]", "", s or "").upper()
+
+def norm(s): return re.sub(r"\s+", " ", (s or "").strip().lower())
+def work_key(title, author):
+    """One key per work (not per copy), so a rating follows the book across everyone's shelves."""
+    return norm(title) + "|" + norm(author)
+def authors_of(author): return [a for a in (norm(x) for x in re.split(r",|&| and ", author or "")) if a]
+
+def my_ratings():
+    return {r["work_key"]: r["stars"] for r in db().execute("SELECT work_key, stars FROM ratings WHERE user_id=?", (session["uid"],))}
+
+def network_ratings():
+    """Ratings by people whose shelves I can see (never strangers'), excluding mine."""
+    return db().execute("SELECT r.user_id, r.work_key, r.stars, r.title, r.author, r.cover_url, u.username FROM ratings r JOIN users u ON u.id=r.user_id "
+                        "WHERE r.user_id IN " + VISIBLE + " AND r.user_id != :me", dict(me=session["uid"])).fetchall()
 
 # ---------- auth ----------
 @app.post("/api/signup")
@@ -216,6 +250,8 @@ def create_invite():
     try: gid = int((request.get_json(silent=True) or {}).get("group_id"))
     except (TypeError, ValueError): return jsonify(error="Pick a group for this invite"), 400
     if not is_member(gid, session["uid"]): return jsonify(error="You can only invite people to groups you're in"), 403
+    if db().execute("SELECT kind FROM groups WHERE id=?", (gid,)).fetchone()[0] != "circle":
+        return jsonify(error="Book clubs don't use invite codes. Add friends to them from the Book Clubs tab"), 400
     code = new_code()
     db().execute("INSERT INTO invites(code, created_by, group_id) VALUES(?,?,?)", (code, session["uid"], gid)); db().commit()
     return jsonify(ok=True, code=code)
@@ -241,7 +277,7 @@ def redeem_invite():
 @login_required
 def my_groups():
     gs = db().execute("""SELECT g.id, g.name, ou.username owner FROM groups g JOIN group_members m ON m.group_id=g.id
-        LEFT JOIN users ou ON ou.id=g.owner_id WHERE m.user_id=? ORDER BY g.name""", (session["uid"],)).fetchall()
+        LEFT JOIN users ou ON ou.id=g.owner_id WHERE m.user_id=? AND g.kind='circle' ORDER BY g.name""", (session["uid"],)).fetchall()
     out = []
     for g_ in gs:
         mem = db().execute("""SELECT u.username, (SELECT COUNT(*) FROM books b WHERE b.owner_id=u.id AND b.shelf_id IS NULL) books
@@ -249,6 +285,175 @@ def my_groups():
         sh = db().execute("SELECT s.id, s.name, (SELECT COUNT(*) FROM books b WHERE b.shelf_id=s.id) books FROM shelves s WHERE s.group_id=?", (g_["id"],)).fetchall()
         out.append(dict(g_, members=[dict(m) for m in mem], shelves=[dict(x) for x in sh]))
     return jsonify(groups=out)
+
+# ---------- friends ----------
+def user_by_name(name):
+    return db().execute("SELECT id, username FROM users WHERE username=?", ((name or "").strip(),)).fetchone()
+
+def is_friend(a, b):
+    return db().execute("""SELECT 1 FROM friendships WHERE status='accepted' AND
+        ((from_id=? AND to_id=?) OR (from_id=? AND to_id=?))""", (a, b, b, a)).fetchone() is not None
+
+@app.get("/api/friends")
+@login_required
+def list_friends():
+    me_ = session["uid"]
+    shelf = "COALESCE(u.shelf_name, u.username || '''s shelf') shelf_name, (SELECT COUNT(*) FROM books b WHERE b.owner_id=u.id AND b.shelf_id IS NULL) books"
+    friends = db().execute("SELECT u.id, u.username, " + shelf + " FROM users u WHERE u.id IN " + FRIENDS + " ORDER BY u.username",
+                           dict(me=me_)).fetchall()
+    inc = db().execute("SELECT u.id, u.username, f.created_at FROM friendships f JOIN users u ON u.id=f.from_id WHERE f.to_id=? AND f.status='pending' ORDER BY f.created_at DESC", (me_,)).fetchall()
+    out = db().execute("SELECT u.id, u.username, f.created_at FROM friendships f JOIN users u ON u.id=f.to_id WHERE f.from_id=? AND f.status='pending' ORDER BY f.created_at DESC", (me_,)).fetchall()
+    return jsonify(friends=[dict(r) for r in friends], incoming=[dict(r) for r in inc], outgoing=[dict(r) for r in out])
+
+@app.post("/api/friends")
+@login_required
+def add_friend():
+    me_ = session["uid"]
+    u = user_by_name((request.get_json(silent=True) or {}).get("username"))
+    if not u: return jsonify(error="No member with that name"), 404
+    if u["id"] == me_: return jsonify(error="That's you!"), 400
+    if is_friend(me_, u["id"]): return jsonify(ok=True, note=f"You and {u['username']} are already friends")
+    rev = db().execute("SELECT 1 FROM friendships WHERE from_id=? AND to_id=? AND status='pending'", (u["id"], me_)).fetchone()
+    if rev:  # they already asked us: sending one back accepts it
+        db().execute("UPDATE friendships SET status='accepted' WHERE from_id=? AND to_id=?", (u["id"], me_)); db().commit()
+        return jsonify(ok=True, note=f"You and {u['username']} are now friends")
+    db().execute("INSERT OR IGNORE INTO friendships(from_id, to_id) VALUES(?,?)", (me_, u["id"])); db().commit()
+    return jsonify(ok=True, note=f"Friend request sent to {u['username']}")
+
+@app.post("/api/friends/<int:uid>/<action>")
+@login_required
+def answer_friend(uid, action):
+    me_ = session["uid"]
+    if action == "accept":
+        n = db().execute("UPDATE friendships SET status='accepted' WHERE from_id=? AND to_id=? AND status='pending'", (uid, me_)).rowcount
+        db().commit()
+        return jsonify(ok=True) if n else (jsonify(error="No such request"), 404)
+    if action == "decline":
+        db().execute("DELETE FROM friendships WHERE from_id=? AND to_id=? AND status='pending'", (uid, me_)); db().commit()
+        return jsonify(ok=True)
+    return jsonify(error="bad action"), 400
+
+@app.delete("/api/friends/<int:uid>")
+@login_required
+def remove_friend(uid):
+    """Unfriend, or cancel a request you sent."""
+    me_ = session["uid"]
+    db().execute("DELETE FROM friendships WHERE (from_id=? AND to_id=?) OR (from_id=? AND to_id=? AND status='accepted')", (me_, uid, uid, me_))
+    db().commit(); return jsonify(ok=True)
+
+# ---------- mini book clubs (chat-style groups) ----------
+def club_or_404(cid):
+    r = db().execute("""SELECT g.id, g.name, g.owner_id FROM groups g JOIN group_members m ON m.group_id=g.id
+        WHERE g.id=? AND g.kind='club' AND m.user_id=?""", (cid, session["uid"])).fetchone()
+    return r
+
+def club_members(cid):
+    return [dict(r) for r in db().execute("""SELECT u.id, u.username FROM group_members m JOIN users u ON u.id=m.user_id
+        WHERE m.group_id=? ORDER BY m.joined_at""", (cid,)).fetchall()]
+
+def msg_rows(cid, after=0, limit=200):
+    rows = db().execute("""SELECT * FROM (SELECT m.id, m.body, m.created_at, m.user_id, COALESCE(u.username, 'former member') author
+        FROM messages m LEFT JOIN users u ON u.id=m.user_id WHERE m.group_id=? AND m.id>? ORDER BY m.id DESC LIMIT ?) ORDER BY id""",
+                        (cid, after, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+def post_system(cid, text):
+    db().execute("INSERT INTO messages(group_id, user_id, body) VALUES(?, NULL, ?)", (cid, text))
+
+@app.get("/api/clubs")
+@login_required
+def list_clubs():
+    rows = db().execute("""SELECT g.id, g.name,
+          (SELECT COUNT(*) FROM group_members x WHERE x.group_id=g.id) member_count,
+          (SELECT body FROM messages WHERE group_id=g.id ORDER BY id DESC LIMIT 1) last_body,
+          (SELECT COALESCE(u.username, '') FROM messages mm LEFT JOIN users u ON u.id=mm.user_id WHERE mm.group_id=g.id ORDER BY mm.id DESC LIMIT 1) last_author,
+          (SELECT MAX(id) FROM messages WHERE group_id=g.id) last_id,
+          COALESCE((SELECT MAX(created_at) FROM messages WHERE group_id=g.id), g.created_at) active_at
+        FROM groups g JOIN group_members m ON m.group_id=g.id WHERE m.user_id=? AND g.kind='club'
+        ORDER BY active_at DESC""", (session["uid"],)).fetchall()
+    out = []
+    for r in rows:
+        out.append(dict(r, members=[m["username"] for m in club_members(r["id"])]))
+    return jsonify(clubs=out)
+
+@app.post("/api/clubs")
+@login_required
+def create_club():
+    d = request.get_json(silent=True) or {}
+    name = (d.get("name") or "").strip()
+    if not name or len(name) > 60: return jsonify(error="Club name must be 1-60 characters"), 400
+    ids = []
+    for x in d.get("members") or []:
+        try: x = int(x)
+        except (TypeError, ValueError): return jsonify(error="Bad member"), 400
+        if x != session["uid"] and x not in ids:
+            if not is_friend(session["uid"], x): return jsonify(error="You can only add friends to a book club"), 403
+            ids.append(x)
+    if len(ids) + 1 > MAX_CLUB_MEMBERS: return jsonify(error=f"Book clubs can have up to {MAX_CLUB_MEMBERS} members"), 400
+    cid = db().execute("INSERT INTO groups(name, owner_id, kind) VALUES(?,?,'club')", (name, session["uid"])).lastrowid
+    for uid in [session["uid"]] + ids:
+        db().execute("INSERT OR IGNORE INTO group_members(group_id, user_id) VALUES(?,?)", (cid, uid))
+    post_system(cid, f"{session['name']} started the book club")
+    db().commit()
+    return jsonify(ok=True, id=cid)
+
+@app.get("/api/clubs/<int:cid>")
+@login_required
+def get_club(cid):
+    c = club_or_404(cid)
+    if not c: return jsonify(error="No such book club"), 404
+    try: after = max(0, int(request.args.get("after") or 0))
+    except ValueError: after = 0
+    return jsonify(id=c["id"], name=c["name"], members=club_members(cid), messages=msg_rows(cid, after), me=session["uid"])
+
+@app.post("/api/clubs/<int:cid>/messages")
+@login_required
+def post_message(cid):
+    if not club_or_404(cid): return jsonify(error="No such book club"), 404
+    body = ((request.get_json(silent=True) or {}).get("body") or "").strip()
+    if not body: return jsonify(error="Message is empty"), 400
+    if len(body) > MAX_MSG: return jsonify(error=f"Messages can be up to {MAX_MSG} characters"), 400
+    mid = db().execute("INSERT INTO messages(group_id, user_id, body) VALUES(?,?,?)", (cid, session["uid"], body)).lastrowid
+    db().commit(); return jsonify(ok=True, id=mid)
+
+@app.post("/api/clubs/<int:cid>/members")
+@login_required
+def add_club_member(cid):
+    if not club_or_404(cid): return jsonify(error="No such book club"), 404
+    try: uid = int((request.get_json(silent=True) or {}).get("user_id"))
+    except (TypeError, ValueError): return jsonify(error="Pick a friend to add"), 400
+    if not is_friend(session["uid"], uid): return jsonify(error="You can only add your friends"), 403
+    if is_member(cid, uid): return jsonify(ok=True, note="Already in the club")
+    if len(club_members(cid)) >= MAX_CLUB_MEMBERS: return jsonify(error=f"Book clubs can have up to {MAX_CLUB_MEMBERS} members"), 400
+    db().execute("INSERT INTO group_members(group_id, user_id) VALUES(?,?)", (cid, uid))
+    name = db().execute("SELECT username FROM users WHERE id=?", (uid,)).fetchone()[0]
+    post_system(cid, f"{session['name']} added {name}")
+    db().commit(); return jsonify(ok=True)
+
+@app.post("/api/clubs/<int:cid>/rename")
+@login_required
+def rename_club(cid):
+    if not club_or_404(cid): return jsonify(error="No such book club"), 404
+    name = ((request.get_json(silent=True) or {}).get("name") or "").strip()
+    if not name or len(name) > 60: return jsonify(error="Club name must be 1-60 characters"), 400
+    db().execute("UPDATE groups SET name=? WHERE id=?", (name, cid))
+    post_system(cid, f"{session['name']} renamed the club to “{name}”")
+    db().commit(); return jsonify(ok=True)
+
+@app.post("/api/clubs/<int:cid>/leave")
+@login_required
+def leave_club(cid):
+    c = club_or_404(cid)
+    if not c: return jsonify(error="No such book club"), 404
+    db().execute("DELETE FROM group_members WHERE group_id=? AND user_id=?", (cid, session["uid"]))
+    rest = club_members(cid)
+    if not rest:
+        db().execute("DELETE FROM groups WHERE id=?", (cid,))  # last one out: messages cascade
+    else:
+        if c["owner_id"] == session["uid"]:
+            db().execute("UPDATE groups SET owner_id=? WHERE id=?", (rest[0]["id"], cid))
+        post_system(cid, f"{session['name']} left the club")
+    db().commit(); return jsonify(ok=True)
 
 # ---------- ISBN lookup ----------
 def _get(url):
@@ -291,7 +496,8 @@ def manageable_shelves():
 def my_books():
     rows = db().execute("""SELECT b.*, COALESCE(s.name, COALESCE(u.shelf_name, u.username || '''s shelf')) shelf FROM books b JOIN users u ON u.id=b.owner_id LEFT JOIN shelves s ON s.id=b.shelf_id
         WHERE """ + BOOK_MANAGED + " ORDER BY b.shelf_id IS NOT NULL, s.name, b.location, b.title", dict(me=session["uid"])).fetchall()
-    return jsonify([dict(r) for r in rows])
+    mr = my_ratings()
+    return jsonify([dict(r, my_rating=mr.get(work_key(r["title"], r["author"]))) for r in rows])
 
 @app.post("/api/books")
 @login_required
@@ -342,7 +548,103 @@ def search():
         else:
             name = r["shelf"].split(" (")[0] if r["shelf"] else r["pshelf"]
             g_["friends"].append(dict(id=r["id"], owner=name, shared=r["shelf_id"] is not None, location=r["location"]))
+    mr, net = my_ratings(), {}
+    for r in network_ratings(): net.setdefault(r["work_key"], []).append(r["stars"])
+    for g_ in groups.values():
+        k = work_key(g_["title"], g_["author"]); n = net.get(k, [])
+        g_.update(my_rating=mr.get(k), net_avg=round(sum(n) / len(n), 1) if n else None, net_count=len(n))
     return jsonify(query=q, results=list(groups.values()))
+
+# ---------- ratings & suggestions ----------
+@app.post("/api/ratings")
+@login_required
+def rate():
+    d = request.get_json(silent=True) or {}
+    t = (d.get("title") or "").strip()
+    if not t: return jsonify(error="Title is required"), 400
+    try: st = int(d.get("stars"))
+    except (TypeError, ValueError): return jsonify(error="Stars must be 1-5 (0 clears)"), 400
+    if not 0 <= st <= 5: return jsonify(error="Stars must be 1-5 (0 clears)"), 400
+    a = (d.get("author") or "").strip() or None
+    k = work_key(t, a)
+    if st == 0:
+        db().execute("DELETE FROM ratings WHERE user_id=? AND work_key=?", (session["uid"], k))
+    else:
+        db().execute("""INSERT INTO ratings(user_id, work_key, title, author, cover_url, stars) VALUES(?,?,?,?,?,?)
+            ON CONFLICT(user_id, work_key) DO UPDATE SET stars=excluded.stars, rated_at=CURRENT_TIMESTAMP,
+            cover_url=COALESCE(excluded.cover_url, ratings.cover_url)""", (session["uid"], k, t, a, d.get("cover_url") or None, st))
+    db().commit(); return jsonify(ok=True, stars=st or None)
+
+@app.get("/api/suggestions")
+@login_required
+def suggestions():
+    """Suggest books from your network, scored by:
+      1. taste-matching: people who rated books like you did; their 4-5★ books push up, 1-2★ push down;
+      2. author affinity: other books by authors you rated well (or badly);
+      3. a small boost for books someone in your network can lend you right now.
+    Books you own, manage or have already rated are never suggested."""
+    me_ = session["uid"]
+    mine = {r["work_key"]: dict(r) for r in db().execute("SELECT * FROM ratings WHERE user_id=?", (me_,))}
+    owned = {work_key(r["title"], r["author"]) for r in db().execute("SELECT b.title, b.author FROM books b WHERE " + BOOK_MANAGED, dict(me=me_))}
+    lendable = db().execute("""SELECT b.id, b.title, b.author, b.cover_url, s.name shelf, COALESCE(u.shelf_name, u.username || '''s shelf') pshelf
+        FROM books b JOIN users u ON u.id=b.owner_id LEFT JOIN shelves s ON s.id=b.shelf_id
+        WHERE """ + BOOK_VISIBLE + " AND NOT COALESCE(" + BOOK_MANAGED + ", 0)", dict(me=me_)).fetchall()  # COALESCE: NULL IN (...) is NULL, not false
+    others = network_ratings()
+
+    # 1. how much each person's taste agrees with mine (per shared book: +1 same stars, 0 two apart, -1 four apart)
+    by_user = {}
+    for r in others: by_user.setdefault(r["user_id"], []).append(r)
+    sim, agree_n = {}, {}
+    for uid, rs in by_user.items():
+        shared = [(mine[r["work_key"]]["stars"], r["stars"]) for r in rs if r["work_key"] in mine]
+        agree_n[uid] = len(shared)
+        sim[uid] = max(0.0, sum(1 - abs(a - b) / 2 for a, b in shared) / (len(shared) + 1)) if shared else 0.0
+
+    # 2. author affinity from my ratings: +2 for 5★ ... -2 for 1★, averaged per author
+    aff, aff_src = {}, {}
+    for m in mine.values():
+        for au in authors_of(m["author"]):
+            aff.setdefault(au, []).append(m["stars"] - 3)
+            if m["stars"] >= 4: aff_src.setdefault(au, m["title"])
+    aff = {au: sum(v) / len(v) for au, v in aff.items()}
+
+    cand = {}
+    def c(k, title, author, cover):
+        x = cand.setdefault(k, dict(title=title, author=author, cover_url=cover, score=0.0, reasons={}, copies=[], ratings=[]))
+        x["cover_url"] = x["cover_url"] or cover
+        return x
+    for r in others:
+        k = r["work_key"]
+        if k in mine or k in owned: continue
+        x = c(k, r["title"], r["author"], r["cover_url"]); x["ratings"].append(r["stars"])
+        w = 0.25 + sim[r["user_id"]]  # everyone counts a little; people who share your taste count a lot more
+        x["score"] += w * (r["stars"] - 3)
+        if r["stars"] >= 4:
+            if sim[r["user_id"]] >= 0.3 and agree_n[r["user_id"]]:
+                x["reasons"].setdefault("taste", f"{r['username']} rated it {r['stars']}★ and shares your taste on {agree_n[r['user_id']]} book{'s' * (agree_n[r['user_id']] > 1)}")
+            else:
+                x["reasons"].setdefault("liked", f"{r['username']} rated it {r['stars']}★")
+    for b in lendable:
+        k = work_key(b["title"], b["author"])
+        if k in mine or k in owned: continue
+        x = c(k, b["title"], b["author"], b["cover_url"])
+        x["copies"].append(dict(id=b["id"], owner=b["shelf"].split(" (")[0] if b["shelf"] else b["pshelf"]))
+    for k, x in cand.items():
+        best = max((aff[a] for a in authors_of(x["author"]) if a in aff), default=None)
+        if best is not None:
+            x["score"] += 1.5 * best
+            src = next((aff_src[a] for a in authors_of(x["author"]) if a in aff_src), None)
+            if best > 0 and src: x["reasons"].setdefault("author", f"Because you liked “{src}”")
+        if x["copies"] and x["score"] > 0: x["score"] += 0.3
+    out = []
+    for x in sorted(cand.values(), key=lambda x: -x["score"]):
+        if x["score"] <= 0 or not x["reasons"]: continue
+        rs = x.pop("ratings"); x["net_avg"] = round(sum(rs) / len(rs), 1) if rs else None; x["net_count"] = len(rs)
+        x["reasons"] = [x["reasons"][k] for k in ("author", "taste", "liked") if k in x["reasons"]][:2]
+        x["copies"] = x["copies"][:3]; x["score"] = round(x["score"], 2)
+        out.append(x)
+        if len(out) >= 12: break
+    return jsonify(suggestions=out, rated=len(mine))
 
 # ---------- borrow requests ----------
 @app.post("/api/borrow/<int:bid>")
