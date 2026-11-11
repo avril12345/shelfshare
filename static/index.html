@@ -19,7 +19,7 @@
 </section>
 
 <main id="app" class="hidden">
-  <nav aria-label="Sections"><button data-tab="search" class="on">Catalogue</button><button data-tab="add">Accession</button><button data-tab="mine">My Shelves</button><button data-tab="reqs">Borrowing</button><button data-tab="groups">Members</button><button data-tab="invites">Invite a member</button></nav>
+  <nav aria-label="Sections"><button data-tab="search" class="on">Catalogue</button><button data-tab="add">Upload</button><button data-tab="mine">My Shelves</button><button data-tab="reqs">Borrowing</button><button data-tab="friends">Friends</button><button data-tab="clubs">Book Clubs</button><button data-tab="groups">Members</button><button data-tab="invites">Invite a member</button></nav>
 
   <section id="tab-search" class="tab">
     <label class="drawer" for="q"><span class="drawer-label">Card Catalogue · Title · Author</span>
@@ -54,6 +54,22 @@
   <section id="tab-invites" class="tab hidden"><div class="card"><h2>Invite a member</h2>
     <p class="dim small">ShelfShare is by invitation only. Choose a circle, then issue an invitation. Each one works once and admits the bearer to that circle. Members only see books from circles they share with you.</p>
     <select id="invGroup" aria-label="Circle"></select><button id="newInv">Issue invitation</button><p id="invMsg" class="err"></p></div><div id="invites"></div></section>
+  <section id="tab-friends" class="tab hidden">
+    <div class="card"><h2>Add a friend</h2><p class="dim small">Friends can see and borrow from your own shelf, even if you aren't in the same circle. Enter their exact member name.</p>
+    <div class="row"><input id="friendIn" placeholder="Member name" aria-label="Member name" autocapitalize="off" autocomplete="off"><button id="friendBtn">Send request</button></div><p id="friendMsg" class="ok" role="status"></p></div>
+    <div id="friends"></div></section>
+  <section id="tab-clubs" class="tab hidden">
+    <div id="clubList"></div>
+    <div id="clubView" class="hidden">
+      <div class="chat-head"><button class="ghost" id="clubBack" aria-label="Back to book clubs">‹ Clubs</button><div><h2 id="clubName"></h2><div id="clubMembers" class="a"></div></div></div>
+      <div id="chatLog" class="chat-log" aria-live="polite"></div>
+      <form id="chatForm" class="chat-form"><textarea name="body" rows="2" maxlength="2000" placeholder="Write to the club…" aria-label="Message" required></textarea><button>Send</button></form>
+      <details class="card club-settings"><summary>Club settings</summary>
+        <div class="row"><select id="clubAddSel" aria-label="Friend to add"></select><button id="clubAddBtn">Add friend</button></div>
+        <div class="row"><input id="clubRenameIn" maxlength="60" aria-label="Club name"><button id="clubRenameBtn" class="ghost">Rename</button></div>
+        <button id="clubLeaveBtn" class="ghost">Leave this club</button><p id="clubMsg" class="err"></p>
+      </details>
+    </div></section>
   <section id="tab-groups" class="tab hidden"><div id="groups"></div>
     <div class="card"><h2>Join another circle</h2><p class="dim small">Hold an invitation to another circle? Enter its number here.</p>
     <div class="row"><input id="redeemIn" placeholder="Invitation no." aria-label="Invitation number" autocapitalize="characters" autocomplete="off"><button id="redeemBtn">Join</button></div><p id="redeemMsg" class="ok"></p></div></section>
